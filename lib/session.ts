@@ -1,4 +1,4 @@
-import type { ActiveSession, EndReason, SessionMode, SessionRecord } from "./types";
+import type { ActiveSession, EndReason, PageEvent, SessionMode, SessionRecord } from "./types";
 
 export const SECOND = 1000;
 export const MINUTE = 60 * SECOND;
@@ -24,6 +24,11 @@ export const clampPageMs = (ms: number) =>
 
 export const clampDurationMs = (ms: number) =>
   clamp(alignSecond(ms), DURATION_MS_MIN, DURATION_MS_MAX);
+
+export const autoAdvances = (s: ActiveSession) => s.autoAdvance !== false;
+
+/** Reached its limit (auto-advanced) or was finished after it. */
+export const isOverTime = (p: PageEvent) => p.kind === "auto" || !!p.over;
 
 /** Raw elapsed time, not clamped to the session length. */
 function rawElapsed(s: ActiveSession, now: number): number {
@@ -65,17 +70,26 @@ export interface ReconcileResult {
   /** Pages counted automatically during this reconcile. */
   advanced: number;
   finished: boolean;
+  /** Manual mode: the current page's time just ran out (reported once per deadline). */
+  timeUp: boolean;
 }
+
+const unchanged = (session: ActiveSession): ReconcileResult => ({
+  session,
+  advanced: 0,
+  finished: false,
+  timeUp: false,
+});
 
 /**
  * Bring a session up to date with the wall clock: count every page whose
- * micro timer ran out since the last check and finish the session when the
- * target or the macro timer is reached. Safe to call at any frequency — after
- * a throttled background tab or a reload it catches up in one pass, stamping
- * each page with the moment it actually completed.
+ * micro timer ran out since the last check (when auto-advancing) and finish
+ * the session when the target or the macro timer is reached. Safe to call at
+ * any frequency — after a throttled background tab or a reload it catches up
+ * in one pass, stamping each page with the moment it actually completed.
  */
 export function reconcile(s: ActiveSession, now: number): ReconcileResult {
-  if (s.status === "finished") return { session: s, advanced: 0, finished: false };
+  if (s.status === "finished") return unchanged(s);
 
   const elapsed = rawElapsed(s, now);
   if (s.pages.length >= s.targetPages) {
@@ -83,9 +97,22 @@ export function reconcile(s: ActiveSession, now: number): ReconcileResult {
       session: finishAt(s, Math.min(elapsed, s.durationMs), "target", now),
       advanced: 0,
       finished: true,
+      timeUp: false,
     };
   }
-  if (s.status !== "running") return { session: s, advanced: 0, finished: false };
+  if (s.status !== "running") return unchanged(s);
+
+  if (!autoAdvances(s)) {
+    // Nothing is counted until the user presses Next; the page runs into overtime.
+    if (elapsed >= s.durationMs) {
+      return { ...unchanged(finishAt(s, s.durationMs, "time", now)), finished: true };
+    }
+    const deadline = s.pageStartMs + s.pageMs;
+    if (elapsed >= deadline && s.timeUpAt !== deadline) {
+      return { ...unchanged({ ...s, timeUpAt: deadline }), timeUp: true };
+    }
+    return unchanged(s);
+  }
 
   let pageStartMs = s.pageStartMs;
   const added: ActiveSession["pages"] = [];
@@ -106,11 +133,11 @@ export function reconcile(s: ActiveSession, now: number): ReconcileResult {
     break;
   }
 
-  if (!added.length && !finish) return { session: s, advanced: 0, finished: false };
+  if (!added.length && !finish) return unchanged(s);
 
   let next: ActiveSession = { ...s, pageStartMs, pages: [...s.pages, ...added] };
   if (finish) next = finishAt(next, finish.elapsed, finish.reason, now);
-  return { session: next, advanced: added.length, finished: !!finish };
+  return { session: next, advanced: added.length, finished: !!finish, timeUp: false };
 }
 
 // ── Actions ────────────────────────────────────────────────────────────────
@@ -125,6 +152,7 @@ export interface StartParams {
   targetPages: number;
   durationMs: number;
   pageMs: number;
+  autoAdvance: boolean;
 }
 
 export function startSession(p: StartParams, now: number): ActiveSession {
@@ -158,9 +186,11 @@ export function skipPage(s: ActiveSession, now: number): ActiveSession {
   const r = reconcile(s, now).session;
   if (r.status === "finished") return r;
   const elapsed = elapsedAt(r, now);
+  const page: PageEvent = { at: now, kind: "manual", el: elapsed };
+  if (elapsed - r.pageStartMs > r.pageMs) page.over = true;
   const next: ActiveSession = {
     ...r,
-    pages: [...r.pages, { at: now, kind: "manual", el: elapsed }],
+    pages: [...r.pages, page],
     pageStartMs: Math.min(alignSecond(elapsed), r.durationMs),
   };
   return reconcile(next, now).session;
@@ -186,18 +216,42 @@ export function restartPage(s: ActiveSession, now: number): ActiveSession {
 /**
  * Change time-per-page. The current page keeps the time already spent on it,
  * so +30s means 30 more seconds now — but a shorter pace never ends the page
- * on the spot.
+ * on the spot, and never re-sounds the alert for a page already in overtime.
  */
 export function setPageMs(s: ActiveSession, pageMs: number, now: number): ActiveSession {
   const r = reconcile(s, now).session;
   if (r.status === "finished") return r;
   const nextPageMs = clampPageMs(pageMs);
   const elapsed = elapsedAt(r, now);
-  let pageStartMs = r.pageStartMs;
-  if (pageStartMs + nextPageMs - elapsed < PAGE_CHANGE_GRACE_MS) {
-    pageStartMs = alignSecond(elapsed + PAGE_CHANGE_GRACE_MS - nextPageMs);
+  const next: ActiveSession = { ...r, pageMs: nextPageMs };
+  const deadline = r.pageStartMs + nextPageMs;
+  if (autoAdvances(r)) {
+    if (deadline - elapsed < PAGE_CHANGE_GRACE_MS) {
+      next.pageStartMs = alignSecond(elapsed + PAGE_CHANGE_GRACE_MS - nextPageMs);
+    }
+  } else if (deadline <= elapsed) {
+    next.timeUpAt = deadline;
   }
-  return reconcile({ ...r, pageMs: nextPageMs, pageStartMs }, now).session;
+  return reconcile(next, now).session;
+}
+
+/**
+ * Turn auto-advance on or off mid-session. Switching it on during overtime
+ * starts the current page fresh rather than counting pages retroactively.
+ */
+export function setAutoAdvance(s: ActiveSession, on: boolean, now: number): ActiveSession {
+  const r = reconcile(s, now).session;
+  if (r.status === "finished" || autoAdvances(r) === on) return r;
+  const elapsed = elapsedAt(r, now);
+  const overdue = on && elapsed - r.pageStartMs >= r.pageMs;
+  return reconcile(
+    {
+      ...r,
+      autoAdvance: on,
+      pageStartMs: overdue ? Math.min(alignSecond(elapsed), r.durationMs) : r.pageStartMs,
+    },
+    now,
+  ).session;
 }
 
 export function setDurationMs(s: ActiveSession, durationMs: number, now: number): ActiveSession {
@@ -237,6 +291,8 @@ export interface SessionView {
   microRemaining: number;
   /** Fraction of the current page's time still left (1 → 0). */
   microFraction: number;
+  /** Time spent past the current page's limit (manual mode only; 0 otherwise). */
+  overtimeMs: number;
   pagesDone: number;
   pagesLeft: number;
   currentPage: number;
@@ -257,23 +313,24 @@ const SUGGEST_STEP = 5 * SECOND;
 export function viewSession(s: ActiveSession, now: number): SessionView {
   const elapsed = elapsedAt(s, now);
   const macroRemaining = Math.max(0, s.durationMs - elapsed);
-  const microElapsed = clamp(elapsed - s.pageStartMs, 0, s.pageMs);
-  const microRemaining = Math.min(s.pageMs - microElapsed, macroRemaining);
+  const spent = Math.max(0, elapsed - s.pageStartMs);
+  const microElapsed = autoAdvances(s) ? Math.min(spent, s.pageMs) : spent;
+  const pageLeft = Math.max(0, s.pageMs - microElapsed);
+  const microRemaining = Math.min(pageLeft, macroRemaining);
   const pagesDone = s.pages.length;
   const pagesLeft = Math.max(0, s.targetPages - pagesDone);
 
   const targetPaceMs = s.durationMs / s.targetPages;
-  const reading = s.status === "finished" ? 0 : microElapsed / s.pageMs;
+  const reading = s.status === "finished" ? 0 : Math.min(1, microElapsed / s.pageMs);
   const paceDelta = pagesDone + reading - elapsed / targetPaceMs;
   const paceStatus: PaceStatus =
     paceDelta >= 0.75 ? "ahead" : paceDelta <= -0.75 ? "behind" : "on-track";
 
-  const timeToTargetMs =
-    pagesLeft > 0 ? s.pageMs - microElapsed + (pagesLeft - 1) * s.pageMs : 0;
+  const timeToTargetMs = pagesLeft > 0 ? pageLeft + (pagesLeft - 1) * s.pageMs : 0;
 
   let suggestedPageMs: number | null = null;
   if (s.status !== "finished" && pagesLeft > 2) {
-    const available = macroRemaining - (s.pageMs - microElapsed);
+    const available = macroRemaining - pageLeft;
     const ideal = available / (pagesLeft - 1);
     const rounded = clampPageMs(Math.floor(ideal / SUGGEST_STEP) * SUGGEST_STEP);
     const diff = Math.abs(rounded - s.pageMs);
@@ -288,7 +345,8 @@ export function viewSession(s: ActiveSession, now: number): SessionView {
     macroProgress: elapsed / s.durationMs,
     microElapsed,
     microRemaining,
-    microFraction: s.pageMs > 0 ? 1 - microElapsed / s.pageMs : 0,
+    microFraction: pageLeft / s.pageMs,
+    overtimeMs: Math.max(0, microElapsed - s.pageMs),
     pagesDone,
     pagesLeft,
     currentPage: s.startPage + pagesDone,
@@ -325,6 +383,14 @@ export function upcomingAlerts(
   let pageEnd = s.pageStartMs + s.pageMs;
   let count = s.pages.length;
   const limit = now + horizonMs;
+
+  if (!autoAdvances(s)) {
+    // Only this page's time-up and the session end; the next page starts on Next.
+    const candidates: UpcomingAlert[] = [];
+    if (pageEnd < s.durationMs) candidates.push({ at: epochAtElapsed(s, pageEnd), kind: "page" });
+    candidates.push({ at: epochAtElapsed(s, s.durationMs), kind: "end" });
+    return candidates.filter((a) => a.at > now && a.at <= limit);
+  }
 
   while (out.length < max) {
     if (pageEnd <= s.durationMs) {
@@ -372,7 +438,7 @@ export function toRecord(s: ActiveSession): SessionRecord {
     endedAt: s.endedAt ?? s.startedAt + s.accumulatedMs,
     activeMs: s.accumulatedMs,
     pageTimes: s.pages.map((p) => p.at),
-    timedOut: s.pages.filter((p) => p.kind === "auto").length,
+    timedOut: s.pages.filter(isOverTime).length,
     endReason: s.endReason ?? "ended",
   };
 }

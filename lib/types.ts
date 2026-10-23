@@ -24,6 +24,8 @@ export interface PageEvent {
   kind: PageEventKind;
   /** Session elapsed time when it was counted (absent in data saved before practice mode). */
   el?: number;
+  /** Counted by hand after its time limit had already passed. */
+  over?: boolean;
 }
 
 export type SessionStatus = "running" | "paused" | "finished";
@@ -40,6 +42,12 @@ export interface ActiveSession {
   id: string;
   /** Absent means "read" (sessions saved before practice mode). */
   mode?: SessionMode;
+  /**
+   * Count the page and move on when its time runs out. When false the timer
+   * runs into overtime until the user presses Next. Absent means true
+   * (sessions saved before the option existed).
+   */
+  autoAdvance?: boolean;
   bookId: string | null;
   title: string;
   startPage: number;
@@ -53,6 +61,8 @@ export interface ActiveSession {
   /** Elapsed time at which the current page began. */
   pageStartMs: number;
   pages: PageEvent[];
+  /** Elapsed time of the last page deadline whose time-up alert has fired (manual mode). */
+  timeUpAt?: number;
   endedAt?: number;
   endReason?: EndReason;
 }
@@ -71,7 +81,7 @@ export interface SessionRecord {
   activeMs: number;
   /** Epoch ms of each counted page. */
   pageTimes: number[];
-  /** How many were counted because their timer ran out. */
+  /** How many reached or passed their time limit. */
   timedOut?: number;
   endReason: EndReason;
 }
@@ -90,9 +100,11 @@ export interface SetupPrefs {
   bookId: string | null;
   durationMs: number;
   pageMs: number;
+  autoAdvance: boolean;
   practice: {
     title: string;
     durationMs: number;
     pageMs: number;
+    autoAdvance: boolean;
   };
 }

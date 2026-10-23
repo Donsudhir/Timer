@@ -116,7 +116,7 @@ export function StatsScreen() {
           <Tile
             label="In time"
             value={inTime === null ? "—" : `${inTime}%`}
-            sub={t.sessionPages ? `${t.timedOut} timed out` : "none in range"}
+            sub={t.sessionPages ? `${t.timedOut} over time` : "none in range"}
           />
         ) : (
           <Tile

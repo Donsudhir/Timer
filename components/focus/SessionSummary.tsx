@@ -1,12 +1,13 @@
 "use client";
 
 import { formatDuration, formatPace } from "@/lib/format";
-import { worthSaving } from "@/lib/session";
+import { useEnterKey } from "@/lib/hooks";
+import { isOverTime, worthSaving } from "@/lib/session";
 import { useApp } from "@/lib/store";
 import type { ActiveSession } from "@/lib/types";
 import { unitsFor } from "@/lib/units";
 import { bookProgress, isFinished } from "../books";
-import { Bar, Button, Card } from "../ui";
+import { Bar, Button, Card, IfKeyboard, Kbd } from "../ui";
 import { QuestionTimes } from "./QuestionTimes";
 
 const HEADLINES = {
@@ -17,13 +18,14 @@ const HEADLINES = {
 
 export function SessionSummary({ session }: { session: ActiveSession }) {
   const dismiss = useApp((s) => s.dismiss);
+  useEnterKey(dismiss);
   const book = useApp((s) => s.books.find((b) => b.id === session.bookId));
   const practice = session.mode === "practice";
   const units = unitsFor(session.mode);
   const pages = session.pages.length;
   const pace = pages ? session.accumulatedMs / pages : null;
   const last = session.startPage + pages - 1;
-  const withinTime = session.pages.filter((p) => p.kind === "manual").length;
+  const withinTime = session.pages.filter((p) => !isOverTime(p)).length;
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-md animate-rise flex-col justify-center px-6 py-12 pt-safe text-center">
@@ -71,6 +73,9 @@ export function SessionSummary({ session }: { session: ActiveSession }) {
 
       <Button size="lg" className="mt-10 w-full" onClick={dismiss}>
         Done
+        <IfKeyboard>
+            <Kbd className="border-transparent bg-bg/15 text-bg/80">↵</Kbd>
+          </IfKeyboard>
       </Button>
     </div>
   );

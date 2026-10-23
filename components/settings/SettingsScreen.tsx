@@ -32,12 +32,12 @@ export function SettingsScreen() {
   const standalone = window.matchMedia("(display-mode: standalone)").matches;
   const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
 
-  const testSound = () => {
+  const preview = (sound: "page" | "complete") => {
     void alertAudio.unlock().then((ok) => {
-      if (ok) alertAudio.play("page");
+      if (ok) alertAudio.play(sound);
       else setNotice("This browser blocked audio. Check that the tab isn't muted.");
     });
-    if (settings.vibration) vibrate("page");
+    if (settings.vibration) vibrate(sound);
   };
 
   const exportBackup = () => {
@@ -85,7 +85,7 @@ export function SettingsScreen() {
         </Section>
 
         <Section title="Alerts">
-          <SettingRow title="Sound" description="A chime when each page's time is up">
+          <SettingRow title="Sound" description="A chime when time's up, a soft tone when you finish one">
             <Switch label="Sound" checked={settings.sound} onChange={(sound) => update({ sound })} />
           </SettingRow>
           <div className="flex items-center gap-4 py-4">
@@ -101,10 +101,17 @@ export function SettingsScreen() {
               aria-label="Volume"
               className="h-1 w-full cursor-pointer accent-fg disabled:opacity-35"
             />
-            <Button size="sm" variant="secondary" onClick={testSound} disabled={!settings.sound && !settings.vibration}>
-              Test
-            </Button>
           </div>
+          <SettingRow title="Preview">
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary" onClick={() => preview("page")} disabled={!settings.sound}>
+                Time&apos;s up
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => preview("complete")} disabled={!settings.sound}>
+                Finished
+              </Button>
+            </div>
+          </SettingRow>
           <SettingRow
             title="Vibration"
             description={canVibrate() ? "Buzz on each new page" : "Not supported on this device"}

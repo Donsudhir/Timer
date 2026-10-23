@@ -1,14 +1,20 @@
 # PagePace
 
 A calm, strict reading-pace timer. Pick a book, a number of pages and a time per
-page; PagePace runs two synchronized countdowns and turns the page for you when
-each page's time is up, so you finish pages instead of just logging hours.
+page; PagePace runs two synchronized countdowns, one for the session and one for
+the current page, so you finish pages instead of just logging hours.
+
+When a page's time is up you hear a chime. By default you press **Next** when
+you've actually finished; the page timer counts the overtime in red until you
+do, and pages finished late are marked as over time. Turn on **Auto-advance**
+(on the start screen, or mid-session under Adjust) to have the page count itself
+and the next one start the moment time runs out.
 
 **Practice mode** does the same for tests: set a test length and a time per
-question, and each question gets its own countdown. When it runs out, PagePace
-moves you on, which is the habit timed exams reward. The summary charts
-the time spent on every question against the limit, and splits them into
-finished within time vs. timed out.
+question, and each question gets its own countdown. With auto-advance on,
+PagePace moves you on when time runs out, which is the habit timed exams reward.
+The summary charts the time spent on every question against the limit, and
+splits them into finished within time vs. over time.
 
 Installable PWA, local-first, no account.
 
@@ -34,9 +40,11 @@ countdown is `pageMs − (elapsed − pageStartMs)`. Both derive from the same
 timestamp math, so they can't drift apart through pauses, reloads or background
 throttling. Intervals are never counted.
 
-**Reconcile, don't tick.** `reconcile()` in `lib/session.ts` counts every page
-whose time has run out since the last check, stamping each with the moment it
-actually completed, and finishes the session on target or time. After a reload or
+**Reconcile, don't tick.** `reconcile()` in `lib/session.ts` brings a session up
+to date with the clock. With auto-advance on, it counts every page whose time
+has run out since the last check, stamping each with the moment it actually
+completed. With it off, it flags the time-up once so the alert fires. Either way
+it finishes the session on target or time. After a reload or
 a long background stretch it catches up in one pass. The engine
 (`components/runtime.tsx`) schedules its next check for the next whole second of
 the session clock, so both countdowns change on the same frame.
@@ -58,10 +66,22 @@ Settings → Export/Import moves data between devices as JSON.
 
 | Action | Touch | Keyboard |
 | --- | --- | --- |
-| Pause / resume | Center button | Space |
-| Finished the page/question early | Next page / Next question | → or N |
-| Un-count the last one (redo it with a fresh timer) | Undo | U, Backspace, ⌘/Ctrl+Z |
-| Change pace, length or target; restart page; end or reset | Sliders icon | — |
+| Done with this page/question (next) | Next page / Next question | Space, Enter or → |
+| Pause / resume | Center button | P |
+| Undo the last one (redo it with a fresh timer) | Undo | U, Backspace, ⌘/Ctrl+Z |
+| Restart this page's timer | Adjust → Restart | R |
+| Auto-advance on / off | Adjust → Auto-advance | A |
+| Sound on / off | Adjust → Sound | M |
+| Change pace, length or target; end or reset | Sliders icon | — |
+| List shortcuts | Keyboard icon | ? |
+
+Enter also starts a session from the setup screen and closes the summary. Held
+keys don't repeat, so holding Space can't skip through pages.
+
+**Two sounds, on purpose.** When an item's time runs out you hear a ringing
+two-note bell. When *you* finish one, you hear a short, soft pop and marimba
+note. Finishing the last one plays the session-end arpeggio instead. Preview
+both in Settings → Alerts.
 
 ## Layout
 

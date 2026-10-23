@@ -178,6 +178,13 @@ export const GaugeIcon = (p: IconProps) => (
   </Icon>
 );
 
+export const KeyboardIcon = (p: IconProps) => (
+  <Icon {...p}>
+    <rect x="2" y="5" width="20" height="14" rx="2" />
+    <path d="M6 9h.01M10 9h.01M14 9h.01M18 9h.01M8 13h.01M12 13h.01M16 13h.01M7 16h10" />
+  </Icon>
+);
+
 export function LogoMark({ size = 22, className }: { size?: number; className?: string }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" className={className} aria-hidden="true">

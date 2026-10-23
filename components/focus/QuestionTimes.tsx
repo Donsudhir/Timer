@@ -2,13 +2,13 @@
 
 import { useState } from "react";
 import { formatPace } from "@/lib/format";
-import { unitDurations } from "@/lib/session";
+import { isOverTime, unitDurations } from "@/lib/session";
 import type { ActiveSession } from "@/lib/types";
 import { cx } from "../ui";
 
 /**
  * Time spent on each question against the per-question limit. Questions that
- * timed out are highlighted; the rest stay neutral. Hover, focus or tap a bar
+ * reached or passed the limit are highlighted; the rest stay neutral. Hover, focus or tap a bar
  * for its readout; the longest question is shown by default.
  */
 export function QuestionTimes({ session }: { session: ActiveSession }) {
@@ -20,10 +20,10 @@ export function QuestionTimes({ session }: { session: ActiveSession }) {
   const top = Math.max(limit, ...durations);
   const longest = durations.indexOf(Math.max(...durations));
   const shown = hovered ?? longest;
-  const timedOut = (i: number) => session.pages[i].kind === "auto";
+  const overTime = (i: number) => isOverTime(session.pages[i]);
   const label = (i: number) => `Q${session.startPage + i}`;
-  const outCount = session.pages.filter((p) => p.kind === "auto").length;
-  const status = (i: number) => (timedOut(i) ? "Timed out" : "Within time");
+  const outCount = session.pages.filter(isOverTime).length;
+  const status = (i: number) => (overTime(i) ? "Over time" : "Within time");
 
   return (
     <figure>
@@ -67,7 +67,7 @@ export function QuestionTimes({ session }: { session: ActiveSession }) {
               <span
                 className={cx(
                   "block w-full max-w-6 rounded-t-[4px] transition-opacity duration-300 group-focus-visible:ring-2 group-focus-visible:ring-accent",
-                  timedOut(i) ? "bg-chart-hi" : "bg-chart-rest",
+                  overTime(i) ? "bg-chart-hi" : "bg-chart-rest",
                   hovered !== null && hovered !== i && "opacity-40",
                 )}
                 style={{ height: `max(2px, ${(d / top) * 100}%)` }}
@@ -92,7 +92,7 @@ export function QuestionTimes({ session }: { session: ActiveSession }) {
         </span>
         <span className="flex items-center gap-2">
           <span className="h-2.5 w-2.5 rounded-[3px] bg-chart-hi" aria-hidden="true" />
-          Timed out · {outCount}
+          Over time · {outCount}
         </span>
       </div>
 

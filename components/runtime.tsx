@@ -3,10 +3,11 @@
 import { useEffect } from "react";
 import { create } from "zustand";
 import { alertAudio, vibrate } from "@/lib/audio";
-import { formatClock } from "@/lib/format";
+import { formatClock, formatOvertime } from "@/lib/format";
 import {
   MINUTE,
   type ReconcileResult,
+  epochAtElapsed,
   msToNextSecond,
   upcomingAlerts,
   viewSession,
@@ -42,11 +43,15 @@ function SessionEngine() {
     let titled = false;
 
     const notify = (result: ReconcileResult) => {
-      if (!result.advanced && !result.finished) return;
+      if (!result.advanced && !result.finished && !result.timeUp) return;
       const { settings } = useApp.getState();
       const s = result.session;
       const kind = result.finished ? "end" : "page";
-      const last = result.finished ? s.endedAt : s.pages[s.pages.length - 1]?.at;
+      const last = result.finished
+        ? s.endedAt
+        : result.timeUp && s.timeUpAt !== undefined
+          ? epochAtElapsed(s, s.timeUpAt)
+          : s.pages[s.pages.length - 1]?.at;
       // The audio clock usually played this already; fall back if it couldn't.
       if (settings.sound && last !== undefined && !alertAudio.played(last)) {
         alertAudio.play(kind);
@@ -59,8 +64,8 @@ function SessionEngine() {
       if (s && s.status !== "finished") {
         const v = viewSession(s, now);
         const ref = unitsFor(s.mode).ref(v.currentPage);
-        document.title =
-          s.status === "running" ? `${formatClock(v.microRemaining)} · ${ref}` : `Paused · ${ref}`;
+        const clock = v.overtimeMs > 0 ? formatOvertime(v.overtimeMs) : formatClock(v.microRemaining);
+        document.title = s.status === "running" ? `${clock} · ${ref}` : `Paused · ${ref}`;
         titled = true;
       } else if (titled) {
         document.title = APP_TITLE;

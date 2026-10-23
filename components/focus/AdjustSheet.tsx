@@ -11,6 +11,7 @@ import {
   PAGE_MS_MAX,
   PAGE_MS_MIN,
   PAGE_MS_STEP,
+  autoAdvances,
   viewSession,
 } from "@/lib/session";
 import { useApp } from "@/lib/store";
@@ -32,7 +33,8 @@ export function AdjustSheet({
   const v = viewSession(session, now);
   const settings = useApp((s) => s.settings);
   const totalPages = useApp((s) => s.books.find((b) => b.id === session.bookId)?.totalPages);
-  const { setPageMs, setDuration, setTarget, restartPage, end, reset, updateSettings } = useApp.getState();
+  const { setPageMs, setDuration, setTarget, setAutoAdvance, restartPage, end, reset, updateSettings } =
+    useApp.getState();
   const [confirmReset, setConfirmReset] = useState(false);
   const units = unitsFor(session.mode);
   const practice = session.mode === "practice";
@@ -82,6 +84,14 @@ export function AdjustSheet({
           >
             {session.targetPages}
           </Stepper>
+        </SettingRow>
+        <SettingRow
+          title="Auto-advance"
+          description={
+            autoAdvances(session) ? `Next ${units.one} starts when time's up` : "You press Next to move on"
+          }
+        >
+          <Switch label="Auto-advance" checked={autoAdvances(session)} onChange={setAutoAdvance} />
         </SettingRow>
         <SettingRow title="Sound">
           <Switch label="Sound" checked={settings.sound} onChange={(sound) => updateSettings({ sound })} />

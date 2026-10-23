@@ -1,17 +1,26 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
-import { alertAudio } from "@/lib/audio";
-import { formatClock, formatDuration, formatPace, formatTimeOfDay } from "@/lib/format";
+import { useCallback, useEffect, useEffectEvent, useState, type ReactNode } from "react";
+import { type Sound, alertAudio, vibrate } from "@/lib/audio";
+import { formatClock, formatDuration, formatOvertime, formatPace, formatTimeOfDay } from "@/lib/format";
 import { useNow } from "@/lib/hooks";
-import { SECOND, msToNextSecond, viewSession, type SessionView } from "@/lib/session";
+import { SECOND, autoAdvances, msToNextSecond, viewSession, type SessionView } from "@/lib/session";
 import { useApp } from "@/lib/store";
 import type { ActiveSession } from "@/lib/types";
 import { type Units, unitsFor } from "@/lib/units";
-import { GaugeIcon, NextIcon, PauseIcon, PlayIcon, SlidersIcon, UndoIcon, VolumeIcon } from "../icons";
+import {
+  GaugeIcon,
+  KeyboardIcon,
+  NextIcon,
+  PauseIcon,
+  PlayIcon,
+  SlidersIcon,
+  UndoIcon,
+  VolumeIcon,
+} from "../icons";
 import { bookProgress } from "../books";
 import { useAudioReady } from "../runtime";
-import { Bar, IconButton, cx } from "../ui";
+import { Bar, IconButton, IfKeyboard, Kbd, Sheet, cx } from "../ui";
 import { AdjustSheet } from "./AdjustSheet";
 
 function toggleRunning() {
@@ -23,33 +32,118 @@ function toggleRunning() {
   }
 }
 
-/** Space: pause/resume · → or N: next page/question · U, Backspace or ⌘Z: undo. */
-function useShortcuts() {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.altKey || document.querySelector("dialog[open]")) return;
-      const target = e.target as HTMLElement;
-      if (target.closest("input, textarea, select, [contenteditable='true']")) return;
-      const { skip, undo } = useApp.getState();
-      const mod = e.metaKey || e.ctrlKey;
-      if (e.code === "Space" && !mod) {
-        if (target.closest("button, a")) return; // let the focused control handle it
-        e.preventDefault();
-        toggleRunning();
-      } else if ((e.key === "ArrowRight" || e.key === "n") && !mod) {
-        e.preventDefault();
-        skip();
-      } else if ((e.key === "u" || e.key === "Backspace") && !mod) {
-        e.preventDefault();
-        undo();
-      } else if (e.key === "z" && mod && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-      }
+/** Play a sound the user just triggered; the key press or tap itself unlocks audio. */
+function playNow(sound: Sound) {
+  if (alertAudio.ready) alertAudio.play(sound);
+  else void alertAudio.unlock().then((ok) => ok && alertAudio.play(sound));
+}
+
+/**
+ * Count the current page/question as done. Plays the completion sound — or the
+ * session-end sound if that was the last one — distinct from the timer's chime.
+ */
+function completeCurrent() {
+  const { active, skip, settings } = useApp.getState();
+  if (!active || active.status === "finished") return;
+  const before = active.pages.length;
+  skip();
+  const after = useApp.getState().active;
+  if (!after || after.pages.length === before) return;
+  const kind = after.status === "finished" ? "end" : "complete";
+  if (settings.sound) playNow(kind);
+  if (settings.vibration) vibrate(kind);
+}
+
+const isTyping = (target: EventTarget | null) =>
+  target instanceof HTMLElement && !!target.closest("input, textarea, select, [contenteditable='true']");
+
+/**
+ * Space, Enter or →: done with this one · P: pause/resume · U, Backspace or ⌘Z: undo ·
+ * R: restart its timer · A: auto-advance · M: sound · ?: list shortcuts.
+ */
+function useShortcuts({ onHelp, onToast }: { onHelp: () => void; onToast: (text: string) => void }) {
+  const onKeyDown = useEffectEvent((e: KeyboardEvent) => {
+    // Holding a key must not race through pages.
+    if (e.defaultPrevented || e.altKey || e.repeat || isTyping(e.target)) return;
+    if (document.querySelector("dialog[open]")) return;
+    const app = useApp.getState();
+    const s = app.active;
+    if (!s) return;
+    const act = (fn: () => void) => {
+      e.preventDefault();
+      fn();
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    if (e.metaKey || e.ctrlKey) {
+      if (e.key.toLowerCase() === "z" && !e.shiftKey) act(app.undo);
+      return;
+    }
+    const units = unitsFor(s.mode);
+    switch (e.key) {
+      case " ":
+      case "ArrowRight":
+      case "n":
+      case "N":
+        return act(completeCurrent);
+      case "Enter":
+        // Enter still activates a focused button; elsewhere it means done.
+        if (e.target instanceof HTMLElement && e.target.closest("button, a")) return;
+        return act(completeCurrent);
+      case "p":
+      case "P":
+        return act(toggleRunning);
+      case "u":
+      case "U":
+      case "Backspace":
+        return act(app.undo);
+      case "r":
+      case "R":
+        return act(() => {
+          app.restartPage();
+          onToast(`${units.One} timer restarted`);
+        });
+      case "a":
+      case "A":
+        return act(() => {
+          const on = !autoAdvances(s);
+          app.setAutoAdvance(on);
+          onToast(`Auto-advance ${on ? "on" : "off"}`);
+        });
+      case "m":
+      case "M":
+        return act(() => {
+          const on = !app.settings.sound;
+          app.updateSettings({ sound: on });
+          onToast(`Sound ${on ? "on" : "off"}`);
+        });
+      case "?":
+        return act(onHelp);
+    }
+  });
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => onKeyDown(e);
+    // Space is ours even on a focused button: stop the button's own click on key-up.
+    const up = (e: KeyboardEvent) => {
+      if (e.key === " " && !isTyping(e.target) && !document.querySelector("dialog[open]")) e.preventDefault();
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+    };
   }, []);
+}
+
+function useToast() {
+  const [toast, setToast] = useState<{ text: string; id: number } | null>(null);
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 1600);
+    return () => clearTimeout(timer);
+  }, [toast]);
+  const show = useCallback((text: string) => setToast((t) => ({ text, id: (t?.id ?? 0) + 1 })), []);
+  return [toast, show] as const;
 }
 
 export function FocusScreen({ session }: { session: ActiveSession }) {
@@ -62,13 +156,14 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
     const book = s.books.find((b) => b.id === session.bookId);
     return book ? Math.round(bookProgress(book) * 100) : null;
   });
-  const skip = useApp((s) => s.skip);
   const undo = useApp((s) => s.undo);
   const setPageMs = useApp((s) => s.setPageMs);
   const audioReady = useAudioReady((s) => s.ready);
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [dismissedPace, setDismissedPace] = useState<number | null>(null);
-  useShortcuts();
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [toast, showToast] = useToast();
+  useShortcuts({ onHelp: () => setHelpOpen(true), onToast: showToast });
 
   // The ring glides to where it will be at the next whole second, taking exactly
   // that long, so it moves continuously while React renders once per second.
@@ -76,6 +171,10 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
   const ringFraction = running ? viewSession(session, now + toNext).microFraction : v.microFraction;
 
   const suggestion = pickSuggestion(v, session, settings.adaptivePace, dismissedPace);
+  // Manual advance: past the limit the clock counts up until the user presses Next.
+  const overtime = !autoAdvances(session) && v.overtimeMs > 0;
+  const flashKey =
+    v.pagesDone > 0 || session.timeUpAt !== undefined ? `${v.pagesDone}:${session.timeUpAt ?? ""}` : null;
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-lg flex-col px-5 pt-safe sm:px-8">
@@ -90,9 +189,16 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
           </div>
           <div className="truncate font-serif text-[19px] leading-snug tracking-[-0.01em]">{session.title}</div>
         </div>
-        <IconButton label="Adjust session" onClick={() => setAdjustOpen(true)} className="-mr-2">
-          <SlidersIcon size={21} />
-        </IconButton>
+        <div className="-mr-2 flex items-center">
+          <IfKeyboard>
+            <IconButton label="Keyboard shortcuts (?)" onClick={() => setHelpOpen(true)}>
+              <KeyboardIcon size={21} />
+            </IconButton>
+          </IfKeyboard>
+          <IconButton label="Adjust session" onClick={() => setAdjustOpen(true)}>
+            <SlidersIcon size={21} />
+          </IconButton>
+        </div>
       </header>
 
       <div className="flex flex-1 flex-col items-center justify-center gap-8 py-5 sm:gap-10">
@@ -100,8 +206,9 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
           fraction={ringFraction}
           transitionMs={toNext}
           pageKey={session.pageStartMs}
-          flashKey={v.pagesDone}
+          flashKey={flashKey}
           paused={!running}
+          overtime={overtime}
         >
           <div key={v.currentPage} className="label-caps animate-tick-in">
             {units.One} {v.currentPage}
@@ -110,13 +217,20 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
             className={cx(
               "my-1 text-[clamp(68px,20vw,108px)] font-extralight leading-none tracking-[-0.045em] tabular",
               !running && "animate-breathe",
+              overtime && "text-behind",
             )}
             role="timer"
-            aria-label={`${formatClock(v.microRemaining)} left on this ${units.one}`}
+            aria-label={
+              overtime
+                ? `${formatOvertime(v.overtimeMs)} past the time for this ${units.one}`
+                : `${formatClock(v.microRemaining)} left on this ${units.one}`
+            }
           >
-            {formatClock(v.microRemaining)}
+            {overtime ? formatOvertime(v.overtimeMs) : formatClock(v.microRemaining)}
           </div>
-          <div className="text-[13px] text-muted">{running ? `of ${formatPace(session.pageMs)}` : "Paused"}</div>
+          <div className="text-[13px] text-muted">
+            {!running ? "Paused" : overtime ? "Time's up · press Next" : `of ${formatPace(session.pageMs)}`}
+          </div>
         </MicroRing>
 
         <div className="grid w-full grid-cols-2 gap-8">
@@ -170,27 +284,85 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
             <VolumeIcon size={14} /> Tap anywhere to enable sound alerts
           </div>
         )}
+        {toast && (
+          <div key={toast.id} className="flex animate-fade justify-center" role="status">
+            <span className="rounded-full bg-fg px-3.5 py-1.5 text-[13px] font-medium text-bg shadow-soft">
+              {toast.text}
+            </span>
+          </div>
+        )}
       </div>
 
-      <div className="flex items-start justify-center gap-9 pb-[calc(env(safe-area-inset-bottom)+28px)] pt-5 sm:gap-12">
-        <RoundAction label="Undo" onClick={undo} disabled={v.pagesDone === 0}>
+      {/* Equal side columns keep the pause button centred whatever the labels' widths. */}
+      <div className="grid grid-cols-[1fr_auto_1fr] items-start gap-9 pb-[calc(env(safe-area-inset-bottom)+28px)] pt-5 sm:gap-12">
+        <RoundAction
+          label="Undo"
+          hint="U"
+          onClick={undo}
+          disabled={v.pagesDone === 0}
+          className="justify-self-end"
+        >
           <UndoIcon size={22} />
         </RoundAction>
-        <button
-          type="button"
-          onClick={toggleRunning}
-          aria-label={running ? "Pause" : "Resume"}
-          className="flex h-[78px] w-[78px] items-center justify-center rounded-full bg-fg text-bg shadow-soft transition-transform duration-200 hover:scale-[1.03] active:scale-95"
+        <div className="flex flex-col items-center gap-2">
+          <button
+            type="button"
+            onClick={toggleRunning}
+            aria-label={running ? "Pause" : "Resume"}
+            title={`${running ? "Pause" : "Resume"} (P)`}
+            className="flex h-[78px] w-[78px] items-center justify-center rounded-full bg-fg text-bg shadow-soft transition-transform duration-200 hover:scale-[1.03] active:scale-95"
+          >
+            {running ? <PauseIcon size={28} /> : <PlayIcon size={28} className="translate-x-[2px]" />}
+          </button>
+          <IfKeyboard>
+            <ActionLabel label={running ? "Pause" : "Resume"} hint="P" className="text-muted" />
+          </IfKeyboard>
+        </div>
+        <RoundAction
+          label={units.next}
+          hint="Space"
+          onClick={completeCurrent}
+          emphasized={overtime && running}
+          className="justify-self-start"
         >
-          {running ? <PauseIcon size={28} /> : <PlayIcon size={28} className="translate-x-[2px]" />}
-        </button>
-        <RoundAction label={units.next} onClick={skip}>
           <NextIcon size={22} />
         </RoundAction>
       </div>
 
       <AdjustSheet open={adjustOpen} onClose={() => setAdjustOpen(false)} session={session} />
+      <ShortcutsSheet open={helpOpen} onClose={() => setHelpOpen(false)} units={units} />
     </div>
+  );
+}
+
+function ShortcutsSheet({ open, onClose, units }: { open: boolean; onClose: () => void; units: Units }) {
+  const rows: Array<[keys: string[], action: string]> = [
+    [["Space", "Enter"], `Done — next ${units.one}`],
+    [["P"], "Pause / resume"],
+    [["U", "⌫"], "Undo the last one"],
+    [["R"], `Restart this ${units.one}'s timer`],
+    [["A"], "Auto-advance on / off"],
+    [["M"], "Sound on / off"],
+    [["?"], "Show these shortcuts"],
+  ];
+  return (
+    <Sheet open={open} onClose={onClose} title="Shortcuts">
+      <ul className="divide-y divide-line">
+        {rows.map(([keys, action]) => (
+          <li key={action} className="flex items-center justify-between gap-4 py-3 text-[15px]">
+            <span className="text-fg-2">{action}</span>
+            <span className="flex shrink-0 gap-1.5">
+              {keys.map((k) => (
+                <Kbd key={k}>{k}</Kbd>
+              ))}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <p className="mt-4 text-[13px] leading-relaxed text-muted">
+        Finishing a {units.one} plays a short, soft sound; the ringing chime means its time is up.
+      </p>
+    </Sheet>
   );
 }
 
@@ -259,20 +431,23 @@ function MicroRing({
   pageKey,
   flashKey,
   paused,
+  overtime,
   children,
 }: {
   fraction: number;
   transitionMs: number;
   pageKey: number;
-  flashKey: number;
+  /** Changes on each page turn or time-up, replaying the flash. */
+  flashKey: string | null;
   paused: boolean;
+  overtime: boolean;
   children: ReactNode;
 }) {
   const r = 143;
   const circumference = 2 * Math.PI * r;
   return (
     <div className="relative aspect-square w-[min(80vw,40dvh,340px)] sm:w-[min(40dvh,360px)]">
-      {flashKey > 0 && (
+      {flashKey !== null && (
         <div
           key={flashKey}
           className="pointer-events-none absolute inset-[2.3%] animate-flash rounded-full ring-2 ring-accent"
@@ -280,7 +455,16 @@ function MicroRing({
         />
       )}
       <svg viewBox="0 0 300 300" className="absolute inset-0 h-full w-full -rotate-90" aria-hidden="true">
-        <circle cx="150" cy="150" r={r} fill="none" stroke="var(--ring-track)" strokeWidth="5" />
+        <circle
+          cx="150"
+          cy="150"
+          r={r}
+          fill="none"
+          stroke={overtime ? "var(--behind)" : "var(--ring-track)"}
+          strokeOpacity={overtime ? 0.45 : 1}
+          strokeWidth="5"
+          className={cx("transition-[stroke] duration-500", overtime && !paused && "animate-breathe")}
+        />
         <circle
           key={pageKey}
           cx="150"
@@ -328,28 +512,60 @@ function Stat({
 function RoundAction({
   label,
   onClick,
+  hint,
   disabled,
+  emphasized,
+  className,
   children,
 }: {
   label: string;
+  /** Keyboard shortcut, shown in the tooltip and beside the label on desktop. */
+  hint?: string;
   onClick: () => void;
   disabled?: boolean;
+  /** Draws attention when the user needs to act (time's up, manual advance). */
+  emphasized?: boolean;
+  className?: string;
   children: ReactNode;
 }) {
   return (
-    <div className="flex w-20 flex-col items-center gap-2 pt-[11px]">
+    <div className={cx("flex min-w-20 flex-col items-center gap-2 pt-[11px]", className)}>
       <button
         type="button"
         onClick={onClick}
         disabled={disabled}
         aria-label={label}
-        className="flex h-14 w-14 items-center justify-center rounded-full bg-surface text-fg shadow-soft ring-1 ring-line transition active:scale-90 disabled:pointer-events-none disabled:opacity-30"
+        title={hint ? `${label} (${hint})` : label}
+        className={cx(
+          "flex h-14 w-14 items-center justify-center rounded-full shadow-soft transition duration-300 active:scale-90 disabled:pointer-events-none disabled:opacity-30",
+          emphasized ? "bg-accent text-bg ring-4 ring-accent-soft" : "bg-surface text-fg ring-1 ring-line",
+        )}
       >
         {children}
       </button>
-      <span className={cx("text-[11px] font-medium text-muted transition-opacity", disabled && "opacity-40")}>
-        {label}
-      </span>
+      <ActionLabel
+        label={label}
+        hint={hint}
+        className={cx(emphasized ? "text-fg" : "text-muted", disabled && "opacity-40")}
+      />
     </div>
+  );
+}
+
+function ActionLabel({ label, hint, className }: { label: string; hint?: string; className?: string }) {
+  return (
+    <span
+      className={cx(
+        "flex items-center gap-1.5 whitespace-nowrap text-[11px] font-medium transition-[opacity,color]",
+        className,
+      )}
+    >
+      {label}
+      {hint && (
+        <IfKeyboard>
+          <Kbd className="h-5 min-w-5 px-1 text-[10px]">{hint}</Kbd>
+        </IfKeyboard>
+      )}
+    </span>
   );
 }

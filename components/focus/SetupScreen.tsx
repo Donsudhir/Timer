@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import { alertAudio } from "@/lib/audio";
 import { formatDuration, formatPace, formatTimeOfDay, startOfDay } from "@/lib/format";
-import { useNow } from "@/lib/hooks";
+import { useEnterKey, useNow } from "@/lib/hooks";
 import {
   DURATION_MS_MAX,
   DURATION_MS_MIN,
@@ -21,7 +21,7 @@ import type { Book, SessionMode } from "@/lib/types";
 import { unitsFor } from "@/lib/units";
 import { BookPickerSheet, bookProgress, isFinished } from "../books";
 import { ChevronRightIcon, LogoMark, PlayIcon } from "../icons";
-import { Bar, Button, Card, Segmented, Stepper, cx } from "../ui";
+import { Bar, Button, Card, IfKeyboard, Kbd, Segmented, Stepper, Switch, cx } from "../ui";
 
 const DURATION_PRESETS = [30, 60, 120, 180].map((m) => m * MINUTE);
 const PACE_PRESETS: Record<SessionMode, number[]> = {
@@ -128,6 +128,7 @@ function SetupForm({ mode, now }: { mode: SessionMode; now: number }) {
   const [title, setTitle] = useState(setup.practice.title);
   const [durationMs, setDurationMs] = useState(prefs.durationMs);
   const [pageMs, setPageMs] = useState(prefs.pageMs);
+  const [autoAdvance, setAutoAdvance] = useState(prefs.autoAdvance);
   const [startPage, setStartPage] = useState(() => startPageFor(book));
   const [targetOverride, setTargetOverride] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -150,8 +151,9 @@ function SetupForm({ mode, now }: { mode: SessionMode; now: number }) {
 
   const begin = () => {
     void alertAudio.unlock(); // inside the tap, so chimes are allowed to play later
-    start({ mode, title, bookId, startPage, targetPages: target, durationMs, pageMs });
+    start({ mode, title, bookId, startPage, targetPages: target, durationMs, pageMs, autoAdvance });
   };
+  useEnterKey(begin);
 
   return (
     <>
@@ -217,7 +219,7 @@ function SetupForm({ mode, now }: { mode: SessionMode; now: number }) {
         </Row>
         <Row
           title={`Per ${units.one}`}
-          detail={practice ? "Then moves on" : "Then auto-advances"}
+          detail="Chime at zero"
           control={
             <Stepper
               label={`time per ${units.one}`}
@@ -233,6 +235,11 @@ function SetupForm({ mode, now }: { mode: SessionMode; now: number }) {
         >
           <Presets values={PACE_PRESETS[mode]} value={pageMs} onChange={setPageMs} format={formatDuration} />
         </Row>
+        <Row
+          title="Auto-advance"
+          detail={autoAdvance ? `Next ${units.one} starts when time's up` : `You press Next to move on`}
+          control={<Switch label="Auto-advance" checked={autoAdvance} onChange={setAutoAdvance} />}
+        />
         <Row
           title={practice ? "First question" : "Start page"}
           detail={book ? `of ${book.totalPages}` : practice ? "Its number in your set" : "Where you begin"}
@@ -306,6 +313,9 @@ function SetupForm({ mode, now }: { mode: SessionMode; now: number }) {
         <Button size="lg" className="w-full text-base" onClick={begin}>
           <PlayIcon size={18} />
           {practice ? "Start practice" : "Start session"}
+          <IfKeyboard>
+            <Kbd className="border-transparent bg-bg/15 text-bg/80">↵</Kbd>
+          </IfKeyboard>
         </Button>
       </div>
 

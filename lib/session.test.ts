@@ -8,6 +8,7 @@ import {
   pauseSession,
   reconcile,
   resumeSession,
+  setAutoAdvance,
   setDurationMs,
   setPageMs,
   setTargetPages,
@@ -33,6 +34,7 @@ function make(overrides: Partial<Parameters<typeof startSession>[0]> = {}) {
       targetPages: 36,
       durationMs: 3 * HOUR,
       pageMs: 5 * MINUTE,
+      autoAdvance: true,
       ...overrides,
     },
     T0,
@@ -262,5 +264,74 @@ describe("practice timing", () => {
     s = undoPage(s, T0 + 50 * SECOND);
     s = skipPage(s, T0 + 90 * SECOND);
     expect(unitDurations(s)).toEqual([90 * SECOND]);
+  });
+});
+
+describe("manual advance (auto-advance off)", () => {
+  const manual = (o: Parameters<typeof make>[0] = {}) => make({ autoAdvance: false, ...o });
+
+  it("never counts on its own; reports time-up once, then runs into overtime", () => {
+    const s = manual();
+    const r1 = reconcile(s, T0 + 5 * MINUTE);
+    expect(r1.advanced).toBe(0);
+    expect(r1.timeUp).toBe(true);
+    expect(r1.session.pages).toHaveLength(0);
+
+    const r2 = reconcile(r1.session, T0 + 12 * MINUTE);
+    expect(r2.timeUp).toBe(false);
+    expect(r2.session.pages).toHaveLength(0);
+    const v = viewSession(r2.session, T0 + 12 * MINUTE);
+    expect(v.microRemaining).toBe(0);
+    expect(v.overtimeMs).toBe(7 * MINUTE);
+    expect(v.currentPage).toBe(10);
+  });
+
+  it("Next counts the page, marking it over time when past the limit", () => {
+    let s = manual();
+    s = skipPage(s, T0 + 2 * MINUTE);
+    s = reconcile(s, T0 + 9 * MINUTE).session;
+    s = skipPage(s, T0 + 9 * MINUTE);
+    expect(s.pages.map((p) => !!p.over)).toEqual([false, true]);
+    expect(viewSession(s, T0 + 9 * MINUTE).overtimeMs).toBe(0);
+    expect(toRecord(endSession(s, T0 + 9 * MINUTE)).timedOut).toBe(1);
+  });
+
+  it("alerts again for the next page's deadline", () => {
+    let s = reconcile(manual(), T0 + 6 * MINUTE).session;
+    s = skipPage(s, T0 + 6 * MINUTE);
+    expect(reconcile(s, T0 + 11 * MINUTE).timeUp).toBe(true);
+  });
+
+  it("still ends when the session time runs out", () => {
+    const r = reconcile(manual({ durationMs: 20 * MINUTE }), T0 + HOUR);
+    expect(r.session.status).toBe("finished");
+    expect(r.session.endReason).toBe("time");
+    expect(r.session.pages).toHaveLength(0);
+  });
+
+  it("schedules only this page's time-up and the session end", () => {
+    expect(upcomingAlerts(manual({ durationMs: 30 * MINUTE }), T0, HOUR)).toEqual([
+      { at: T0 + 5 * MINUTE, kind: "page" },
+      { at: T0 + 30 * MINUTE, kind: "end" },
+    ]);
+  });
+
+  it("changing pace while in overtime doesn't sound the alert again", () => {
+    let s = reconcile(manual(), T0 + 6 * MINUTE).session;
+    s = setPageMs(s, 5 * MINUTE + 30 * SECOND, T0 + 6 * MINUTE);
+    expect(reconcile(s, T0 + 6 * MINUTE + SECOND).timeUp).toBe(false);
+  });
+
+  it("switching auto-advance on in overtime restarts the page instead of counting back", () => {
+    let s = reconcile(manual(), T0 + 17 * MINUTE).session;
+    s = setAutoAdvance(s, true, T0 + 17 * MINUTE);
+    expect(s.pages).toHaveLength(0);
+    expect(viewSession(s, T0 + 17 * MINUTE).microRemaining).toBe(5 * MINUTE);
+    expect(reconcile(s, T0 + 22 * MINUTE).advanced).toBe(1);
+  });
+
+  it("switching auto-advance off stops automatic counting", () => {
+    const s = setAutoAdvance(make(), false, T0 + MINUTE);
+    expect(reconcile(s, T0 + 30 * MINUTE).session.pages).toHaveLength(0);
   });
 });

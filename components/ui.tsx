@@ -357,3 +357,24 @@ export function PageHeader({ title, action }: { title: string; action?: ReactNod
     </header>
   );
 }
+
+export function Kbd({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <kbd
+      className={cx(
+        "inline-flex h-6 min-w-6 items-center justify-center rounded-md border border-line-strong bg-surface-2 px-1.5 font-sans text-[11px] font-medium text-fg-2",
+        className,
+      )}
+    >
+      {children}
+    </kbd>
+  );
+}
+
+/**
+ * Shows its children only where a keyboard is likely: wide screens with a mouse
+ * or trackpad. Owns the display property itself, so children keep their own.
+ */
+export function IfKeyboard({ children }: { children: ReactNode }) {
+  return <span className="hidden sm:pointer-fine:contents">{children}</span>;
+}

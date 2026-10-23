@@ -9,6 +9,12 @@ export function formatClock(ms: number): string {
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }
 
+/** Count-up display for time past a limit: 0:00 for the first second, then +0:01, +0:02… */
+export function formatOvertime(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  return total < 1 ? "0:00" : `+${formatClock(total * 1000)}`;
+}
+
 /** Pace such as 5:00 or 4:35 (per page). */
 export function formatPace(ms: number): string {
   const total = Math.round(ms / 1000);

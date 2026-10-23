@@ -10,6 +10,7 @@ import {
   restartPage,
   resumeSession,
   setDurationMs,
+  setAutoAdvance,
   setPageMs,
   setTargetPages,
   skipPage,
@@ -38,7 +39,8 @@ export const DEFAULT_SETUP: SetupPrefs = {
   bookId: null,
   durationMs: 3 * HOUR,
   pageMs: 5 * MINUTE,
-  practice: { title: "", durationMs: HOUR, pageMs: 2 * MINUTE },
+  autoAdvance: false,
+  practice: { title: "", durationMs: HOUR, pageMs: 2 * MINUTE, autoAdvance: false },
 };
 
 export function uid(): string {
@@ -73,6 +75,7 @@ export interface StartInput {
   targetPages: number;
   durationMs: number;
   pageMs: number;
+  autoAdvance: boolean;
 }
 
 export interface BackupFile {
@@ -98,6 +101,7 @@ interface Actions {
   setPageMs: (ms: number) => void;
   setDuration: (ms: number) => void;
   setTarget: (pages: number) => void;
+  setAutoAdvance: (on: boolean) => void;
   end: () => void;
   /** Discard the live session and roll the book back to where it started. */
   reset: () => void;
@@ -207,15 +211,16 @@ export const useApp = create<AppState>()(
               targetPages: input.targetPages,
               durationMs: input.durationMs,
               pageMs: input.pageMs,
+              autoAdvance: input.autoAdvance,
             },
             now,
           );
-          const { durationMs, pageMs } = session;
+          const { durationMs, pageMs, autoAdvance = false } = session;
           set((s) => ({
             active: session,
             setup: practice
-              ? { ...s.setup, mode: "practice", practice: { title, durationMs, pageMs } }
-              : { ...s.setup, mode: "read", bookId: session.bookId, durationMs, pageMs },
+              ? { ...s.setup, mode: "practice", practice: { title, durationMs, pageMs, autoAdvance } }
+              : { ...s.setup, mode: "read", bookId: session.bookId, durationMs, pageMs, autoAdvance },
             books: book
               ? s.books.map((b) =>
                   b.id === book.id
@@ -234,6 +239,7 @@ export const useApp = create<AppState>()(
         setPageMs: (ms) => mutate((s, now) => setPageMs(s, ms, now)),
         setDuration: (ms) => mutate((s, now) => setDurationMs(s, ms, now)),
         setTarget: (pages) => mutate((s, now) => setTargetPages(s, pages, now)),
+        setAutoAdvance: (on) => mutate((s, now) => setAutoAdvance(s, on, now)),
         end: () => mutate(endSession),
 
         reset: () => {

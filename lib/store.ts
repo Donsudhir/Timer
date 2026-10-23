@@ -19,7 +19,7 @@ import {
   worthSaving,
 } from "./session";
 import { STORAGE_KEY } from "./constants";
-import type { ActiveSession, Book, SessionRecord, Settings, SetupPrefs } from "./types";
+import type { ActiveSession, Book, SessionMode, SessionRecord, Settings, SetupPrefs } from "./types";
 
 export { STORAGE_KEY };
 const HISTORY_LIMIT = 2000;
@@ -34,9 +34,11 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 
 export const DEFAULT_SETUP: SetupPrefs = {
+  mode: "read",
   bookId: null,
   durationMs: 3 * HOUR,
   pageMs: 5 * MINUTE,
+  practice: { title: "", durationMs: HOUR, pageMs: 2 * MINUTE },
 };
 
 export function uid(): string {
@@ -63,6 +65,9 @@ export interface BookInput {
 }
 
 export interface StartInput {
+  mode: SessionMode;
+  /** Practice test name; reading sessions take the book's title. */
+  title?: string;
   bookId: string | null;
   startPage: number;
   targetPages: number;
@@ -188,12 +193,16 @@ export const useApp = create<AppState>()(
 
         start: (input) => {
           const now = Date.now();
-          const book = input.bookId ? get().books.find((b) => b.id === input.bookId) : undefined;
+          const practice = input.mode === "practice";
+          const book =
+            !practice && input.bookId ? get().books.find((b) => b.id === input.bookId) : undefined;
+          const title = input.title?.trim() ?? "";
           const session = startSession(
             {
               id: uid(),
+              mode: input.mode,
               bookId: book?.id ?? null,
-              title: book?.title ?? "Reading session",
+              title: book?.title ?? (title || (practice ? "Practice test" : "Reading session")),
               startPage: input.startPage,
               targetPages: input.targetPages,
               durationMs: input.durationMs,
@@ -201,9 +210,12 @@ export const useApp = create<AppState>()(
             },
             now,
           );
+          const { durationMs, pageMs } = session;
           set((s) => ({
             active: session,
-            setup: { bookId: session.bookId, durationMs: session.durationMs, pageMs: session.pageMs },
+            setup: practice
+              ? { ...s.setup, mode: "practice", practice: { title, durationMs, pageMs } }
+              : { ...s.setup, mode: "read", bookId: session.bookId, durationMs, pageMs },
             books: book
               ? s.books.map((b) =>
                   b.id === book.id
@@ -285,7 +297,11 @@ export const useApp = create<AppState>()(
           ...current,
           ...p,
           settings: { ...DEFAULT_SETTINGS, ...p.settings },
-          setup: { ...DEFAULT_SETUP, ...p.setup },
+          setup: {
+            ...DEFAULT_SETUP,
+            ...p.setup,
+            practice: { ...DEFAULT_SETUP.practice, ...p.setup?.practice },
+          },
         };
       },
     },

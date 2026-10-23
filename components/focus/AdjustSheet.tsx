@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { canVibrate } from "@/lib/audio";
-import { formatDuration, formatPace, formatTimeOfDay, plural } from "@/lib/format";
+import { formatDuration, formatPace, formatTimeOfDay } from "@/lib/format";
 import { useNow } from "@/lib/hooks";
 import {
   DURATION_MS_MAX,
@@ -15,6 +15,7 @@ import {
 } from "@/lib/session";
 import { useApp } from "@/lib/store";
 import type { ActiveSession } from "@/lib/types";
+import { unitsFor } from "@/lib/units";
 import { RestartIcon, StopIcon } from "../icons";
 import { Button, Sheet, SettingRow, Stepper, Switch } from "../ui";
 
@@ -33,6 +34,8 @@ export function AdjustSheet({
   const totalPages = useApp((s) => s.books.find((b) => b.id === session.bookId)?.totalPages);
   const { setPageMs, setDuration, setTarget, restartPage, end, reset, updateSettings } = useApp.getState();
   const [confirmReset, setConfirmReset] = useState(false);
+  const units = unitsFor(session.mode);
+  const practice = session.mode === "practice";
 
   const close = () => {
     setConfirmReset(false);
@@ -44,9 +47,9 @@ export function AdjustSheet({
   return (
     <Sheet open={open} onClose={close} title="Adjust">
       <div className="divide-y divide-line">
-        <SettingRow title="Time per page" description="Counts toward this page too">
+        <SettingRow title={`Time per ${units.one}`} description={`Counts toward this ${units.one} too`}>
           <Stepper
-            label="time per page"
+            label={`time per ${units.one}`}
             value={session.pageMs}
             step={PAGE_MS_STEP}
             min={PAGE_MS_MIN}
@@ -56,7 +59,7 @@ export function AdjustSheet({
             {formatPace(session.pageMs)}
           </Stepper>
         </SettingRow>
-        <SettingRow title="Session length" description={`Ends ${formatTimeOfDay(now + v.macroRemaining)}`}>
+        <SettingRow title={practice ? "Test length" : "Session length"} description={`Ends ${formatTimeOfDay(now + v.macroRemaining)}`}>
           <Stepper
             label="session length"
             value={session.durationMs}
@@ -68,9 +71,9 @@ export function AdjustSheet({
             {formatDuration(session.durationMs)}
           </Stepper>
         </SettingRow>
-        <SettingRow title="Target" description={`${plural(v.pagesDone, "page")} read so far`}>
+        <SettingRow title="Target" description={`${units.count(v.pagesDone)} ${practice ? "done" : "read"} so far`}>
           <Stepper
-            label="target pages"
+            label={`target ${units.many}`}
             value={session.targetPages}
             step={1}
             min={v.pagesDone + 1}
@@ -102,7 +105,7 @@ export function AdjustSheet({
             close();
           }}
         >
-          <RestartIcon size={17} /> Restart page
+          <RestartIcon size={17} /> Restart {units.one}
         </Button>
         <Button
           variant="secondary"
@@ -118,7 +121,8 @@ export function AdjustSheet({
       {confirmReset ? (
         <div className="mt-3 animate-fade rounded-2xl bg-behind/10 p-4">
           <p className="text-[13px] leading-snug text-fg-2">
-            Discard this session? Nothing from it is saved, and the book goes back to page {session.startPage}.
+            Discard this session? Nothing from it is saved
+            {session.bookId ? `, and the book goes back to page ${session.startPage}.` : "."}
           </p>
           <div className="mt-3 flex gap-2">
             <Button size="sm" variant="secondary" className="flex-1" onClick={() => setConfirmReset(false)}>

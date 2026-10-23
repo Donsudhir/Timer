@@ -12,6 +12,7 @@ import {
   viewSession,
 } from "@/lib/session";
 import { STORAGE_KEY, useApp, useClock } from "@/lib/store";
+import { unitsFor } from "@/lib/units";
 import { setWakeLock } from "@/lib/wakelock";
 
 const AUDIO_HORIZON_MS = 30 * MINUTE;
@@ -57,10 +58,9 @@ function SessionEngine() {
       const s = useApp.getState().active;
       if (s && s.status !== "finished") {
         const v = viewSession(s, now);
+        const ref = unitsFor(s.mode).ref(v.currentPage);
         document.title =
-          s.status === "running"
-            ? `${formatClock(v.microRemaining)} · p. ${v.currentPage}`
-            : `Paused · p. ${v.currentPage}`;
+          s.status === "running" ? `${formatClock(v.microRemaining)} · ${ref}` : `Paused · ${ref}`;
         titled = true;
       } else if (titled) {
         document.title = APP_TITLE;

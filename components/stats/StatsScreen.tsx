@@ -7,6 +7,8 @@ import { useNow } from "@/lib/hooks";
 import { HOUR } from "@/lib/session";
 import { type Bucket, dailyBuckets, totals, weeklyBuckets, withLive } from "@/lib/stats";
 import { useApp } from "@/lib/store";
+import type { SessionMode } from "@/lib/types";
+import { type Units, unitsFor } from "@/lib/units";
 import { ChartIcon } from "../icons";
 import { PageColumn } from "../Hydrated";
 import { Card, PageHeader, Segmented, buttonClass, cx } from "../ui";
@@ -20,11 +22,18 @@ export function StatsScreen() {
   const active = useApp((s) => s.active);
   const now = useNow();
   const [range, setRange] = useState<Range>("week");
+  const [modeChoice, setModeChoice] = useState<SessionMode | null>(null);
 
-  const records = withLive(history, active, now);
+  const all = withLive(history, active, now);
   const liveId = active && active.status !== "finished" ? active.id : null;
+  const hasPractice = all.some((r) => r.mode === "practice");
+  // Pages and questions don't add up, so each mode has its own stats.
+  const mode = modeChoice ?? all[0]?.mode ?? "read";
+  const units = unitsFor(mode);
+  const practice = mode === "practice";
+  const records = all.filter((r) => (r.mode ?? "read") === mode);
 
-  if (records.length === 0) {
+  if (all.length === 0) {
     return (
       <PageColumn>
         <PageHeader title="Stats" />
@@ -54,10 +63,26 @@ export function StatsScreen() {
   const t = totals(records, since);
   const buckets = days ? dailyBuckets(records, days, now) : weeklyBuckets(records, 12, now);
   const recent = records.slice(0, 25);
+  const inTime = t.sessionPages ? Math.round(((t.sessionPages - t.timedOut) / t.sessionPages) * 100) : null;
 
   return (
     <PageColumn>
-      <PageHeader title="Stats" />
+      <PageHeader
+        title="Stats"
+        action={
+          hasPractice && (
+            <Segmented<SessionMode>
+              label="Session type"
+              value={mode}
+              onChange={setModeChoice}
+              options={[
+                { value: "read", label: "Reading" },
+                { value: "practice", label: "Practice" },
+              ]}
+            />
+          )
+        }
+      />
 
       <Segmented<Range>
         label="Range"
@@ -73,29 +98,44 @@ export function StatsScreen() {
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Tile
-          label="Pages"
+          label={units.Many}
           value={String(t.pages)}
           sub={days ? `${(t.pages / days).toFixed(1)} a day` : `${plural(t.sessions, "session")}`}
         />
-        <Tile label="Reading" value={t.ms ? formatDuration(t.ms) : "0m"} sub={days ? `${formatDuration(t.ms / days)} a day` : "in sessions"} />
         <Tile
-          label="Per page"
+          label={practice ? "Practice" : "Reading"}
+          value={t.ms ? formatDuration(t.ms) : "0m"}
+          sub={days ? `${formatDuration(t.ms / days)} a day` : "in sessions"}
+        />
+        <Tile
+          label={`Per ${units.one}`}
           value={t.paceMs ? formatPace(t.paceMs) : "—"}
-          sub={t.paceMs ? `${(HOUR / t.paceMs).toFixed(1)} pages/hour` : "no pages yet"}
+          sub={t.paceMs ? `${perHour(t.paceMs)} ${units.many}/hour` : `no ${units.many} yet`}
         />
-        <Tile
-          label="Sessions"
-          value={String(t.sessions)}
-          sub={t.sessions ? `${formatDuration(t.ms / t.sessions)} average` : "none in range"}
-        />
+        {practice ? (
+          <Tile
+            label="In time"
+            value={inTime === null ? "—" : `${inTime}%`}
+            sub={t.sessionPages ? `${t.timedOut} timed out` : "none in range"}
+          />
+        ) : (
+          <Tile
+            label="Sessions"
+            value={String(t.sessions)}
+            sub={t.sessions ? `${formatDuration(t.ms / t.sessions)} average` : "none in range"}
+          />
+        )}
       </div>
 
       <Card className="mt-3 p-5 sm:p-6">
-        <BarChart buckets={buckets} unit={days ? "day" : "week"} now={now} key={range} />
+        <BarChart buckets={buckets} units={units} unit={days ? "day" : "week"} now={now} key={`${mode}-${range}`} />
       </Card>
 
       <section className="mt-10">
         <h2 className="label-caps mb-2">Sessions</h2>
+        {recent.length === 0 && (
+          <p className="py-4 text-sm text-muted">No {practice ? "practice" : "reading"} sessions yet.</p>
+        )}
         <ul className="divide-y divide-line">
           {recent.map((r) => {
             const pages = r.pageTimes.length;
@@ -119,7 +159,7 @@ export function StatsScreen() {
                     <span className="text-muted">/{r.targetPages}</span>
                   </div>
                   <div className="mt-0.5 text-xs text-muted tabular">
-                    {pages ? `${formatPace(r.activeMs / pages)} / page` : "—"}
+                    {pages ? `${formatPace(r.activeMs / pages)} / ${units.one}` : "—"}
                   </div>
                 </div>
               </li>
@@ -129,6 +169,11 @@ export function StatsScreen() {
       </section>
     </PageColumn>
   );
+}
+
+function perHour(paceMs: number): string {
+  const n = HOUR / paceMs;
+  return n >= 100 ? String(Math.round(n)) : n.toFixed(1);
 }
 
 function Tile({ label, value, sub }: { label: string; value: string; sub: string }) {
@@ -167,7 +212,17 @@ function axisLabel(b: Bucket, i: number, count: number, unit: "day" | "week"): s
 }
 
 /** Single-series column chart: one bar per day (or week), hover/focus/tap for the readout. */
-function BarChart({ buckets, unit, now }: { buckets: Bucket[]; unit: "day" | "week"; now: number }) {
+function BarChart({
+  buckets,
+  units,
+  unit,
+  now,
+}: {
+  buckets: Bucket[];
+  units: Units;
+  unit: "day" | "week";
+  now: number;
+}) {
   const [hovered, setHovered] = useState<number | null>(null);
   const top = niceCeil(Math.max(...buckets.map((b) => b.pages)));
   const shownIndex = hovered ?? buckets.length - 1;
@@ -177,10 +232,12 @@ function BarChart({ buckets, unit, now }: { buckets: Bucket[]; unit: "day" | "we
     <figure>
       <figcaption className="flex items-end justify-between gap-4">
         <div>
-          <div className="label-caps">Pages per {unit}</div>
+          <div className="label-caps">
+            {units.Many} per {unit}
+          </div>
           <div className="mt-2 text-[28px] font-light leading-none tracking-[-0.03em] tabular">
             {shown.pages}
-            <span className="ml-1.5 text-sm font-normal tracking-normal text-muted">{shown.pages === 1 ? "page" : "pages"}</span>
+            <span className="ml-1.5 text-sm font-normal tracking-normal text-muted">{shown.pages === 1 ? units.one : units.many}</span>
           </div>
         </div>
         <div className="pb-0.5 text-right text-xs text-muted">
@@ -204,7 +261,7 @@ function BarChart({ buckets, unit, now }: { buckets: Bucket[]; unit: "day" | "we
                 key={b.start}
                 type="button"
                 className="group flex h-full flex-1 items-end justify-center px-[1px] outline-none"
-                aria-label={`${bucketLabel(b, unit, now)}: ${plural(b.pages, "page")}`}
+                aria-label={`${bucketLabel(b, unit, now)}: ${units.count(b.pages)}`}
                 onPointerEnter={() => setHovered(i)}
                 onFocus={() => setHovered(i)}
                 onBlur={() => setHovered(null)}
@@ -242,11 +299,13 @@ function BarChart({ buckets, unit, now }: { buckets: Bucket[]; unit: "day" | "we
       </div>
 
       <table className="sr-only">
-        <caption>Pages per {unit}</caption>
+        <caption>
+          {units.Many} per {unit}
+        </caption>
         <thead>
           <tr>
             <th scope="col">{unit === "day" ? "Day" : "Week"}</th>
-            <th scope="col">Pages</th>
+            <th scope="col">{units.Many}</th>
             <th scope="col">Time</th>
           </tr>
         </thead>

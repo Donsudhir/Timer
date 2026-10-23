@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { alertAudio } from "@/lib/audio";
-import { formatDuration, formatPace, formatTimeOfDay, plural, startOfDay } from "@/lib/format";
+import { formatDuration, formatPace, formatTimeOfDay, startOfDay } from "@/lib/format";
 import { useNow } from "@/lib/hooks";
 import {
   DURATION_MS_MAX,
@@ -17,13 +17,17 @@ import {
 } from "@/lib/session";
 import { totals } from "@/lib/stats";
 import { useApp } from "@/lib/store";
-import type { Book } from "@/lib/types";
+import type { Book, SessionMode } from "@/lib/types";
+import { unitsFor } from "@/lib/units";
 import { BookPickerSheet, bookProgress, isFinished } from "../books";
 import { ChevronRightIcon, LogoMark, PlayIcon } from "../icons";
-import { Bar, Button, Card, Stepper, cx } from "../ui";
+import { Bar, Button, Card, Segmented, Stepper, cx } from "../ui";
 
 const DURATION_PRESETS = [30, 60, 120, 180].map((m) => m * MINUTE);
-const PACE_PRESETS = [2, 3, 5, 10].map((m) => m * MINUTE);
+const PACE_PRESETS: Record<SessionMode, number[]> = {
+  read: [2, 3, 5, 10].map((m) => m * MINUTE),
+  practice: [1, 2, 3, 5].map((m) => m * MINUTE),
+};
 
 function initialBook(books: Book[], preferredId: string | null): Book | null {
   const preferred = books.find((b) => b.id === preferredId);
@@ -44,16 +48,86 @@ function greeting(now: number) {
 }
 
 export function SetupScreen() {
+  const savedMode = useApp((s) => s.setup.mode);
+  const history = useApp((s) => s.history);
+  const updateSetup = useApp((s) => s.updateSetup);
+  const now = useNow();
+  const [mode, setMode] = useState<SessionMode>(savedMode);
+  const units = unitsFor(mode);
+  const today = totals(
+    history.filter((r) => (r.mode ?? "read") === mode),
+    startOfDay(now),
+  );
+
+  const switchMode = (next: SessionMode) => {
+    setMode(next);
+    updateSetup({ mode: next });
+  };
+
+  return (
+    <div className="mx-auto flex w-full max-w-xl flex-1 animate-rise flex-col px-5 pb-6 pt-safe sm:px-8">
+      <section className="pb-6 pt-6 md:pb-7 md:pt-12">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-2">
+            <LogoMark size={18} className="shrink-0 md:hidden" />
+            <p className="label-caps truncate">{greeting(now)}</p>
+          </div>
+          <Segmented<SessionMode>
+            label="Session type"
+            value={mode}
+            onChange={switchMode}
+            options={[
+              { value: "read", label: "Read", title: "Time pages of a book" },
+              { value: "practice", label: "Practice", title: "Time questions in a test" },
+            ]}
+          />
+        </div>
+        <h1
+          key={mode}
+          className="mt-4 animate-fade font-serif text-[36px] leading-[1.04] tracking-[-0.025em] sm:text-[46px]"
+        >
+          {mode === "practice" ? (
+            <>
+              How many will
+              <br />
+              you solve today?
+            </>
+          ) : (
+            <>
+              What will you
+              <br />
+              finish today?
+            </>
+          )}
+        </h1>
+        {today.pages > 0 && (
+          <p className="mt-3 text-[13px] text-muted">
+            Today so far: {units.count(today.pages)} in {formatDuration(today.ms)}
+          </p>
+        )}
+      </section>
+
+      <SetupForm key={mode} mode={mode} now={now} />
+    </div>
+  );
+}
+
+/** Keyed by mode, so switching modes starts from that mode's remembered setup. */
+function SetupForm({ mode, now }: { mode: SessionMode; now: number }) {
   const books = useApp((s) => s.books);
   const setup = useApp((s) => s.setup);
-  const history = useApp((s) => s.history);
   const start = useApp((s) => s.start);
-  const now = useNow();
+  const practice = mode === "practice";
+  const units = unitsFor(mode);
+  const prefs = practice ? setup.practice : setup;
 
-  const [bookId, setBookId] = useState<string | null>(() => initialBook(books, setup.bookId)?.id ?? null);
-  const book = books.find((b) => b.id === bookId) ?? null;
-  const [durationMs, setDurationMs] = useState(setup.durationMs);
-  const [pageMs, setPageMs] = useState(setup.pageMs);
+  const [bookId, setBookId] = useState<string | null>(() =>
+    practice ? null : (initialBook(books, setup.bookId)?.id ?? null),
+  );
+  const book = practice ? null : (books.find((b) => b.id === bookId) ?? null);
+  const [title, setTitle] = useState(setup.practice.title);
+  const [durationMs, setDurationMs] = useState(prefs.durationMs);
+  const [pageMs, setPageMs] = useState(prefs.pageMs);
   const [startPage, setStartPage] = useState(() => startPageFor(book));
   const [targetOverride, setTargetOverride] = useState<number | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -65,7 +139,7 @@ export function SetupScreen() {
   const neededMs = target * pageMs;
   const fits = neededMs <= durationMs;
   const fittingPace = clampPageMs(Math.floor(durationMs / target / (5 * SECOND)) * 5 * SECOND);
-  const today = totals(history, startOfDay(now));
+  const last = startPage + target - 1;
 
   const selectBook = (id: string | null) => {
     const next = books.find((b) => b.id === id) ?? null;
@@ -76,62 +150,59 @@ export function SetupScreen() {
 
   const begin = () => {
     void alertAudio.unlock(); // inside the tap, so chimes are allowed to play later
-    start({ bookId, startPage, targetPages: target, durationMs, pageMs });
+    start({ mode, title, bookId, startPage, targetPages: target, durationMs, pageMs });
   };
 
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-1 animate-rise flex-col px-5 pb-6 pt-safe sm:px-8">
-      <section className="pb-6 pt-7 md:pb-7 md:pt-14">
-        <div className="flex items-center gap-2">
-          <LogoMark size={18} className="md:hidden" />
-          <p className="label-caps">{greeting(now)}</p>
-        </div>
-        <h1 className="mt-2.5 font-serif text-[36px] leading-[1.04] tracking-[-0.025em] sm:text-[46px]">
-          What will you
-          <br />
-          finish today?
-        </h1>
-        {today.pages > 0 && (
-          <p className="mt-3 text-[13px] text-muted">
-            Today so far: {plural(today.pages, "page")} in {formatDuration(today.ms)}
-          </p>
-        )}
-      </section>
-
-      <button
-        type="button"
-        onClick={() => setPickerOpen(true)}
-        className="group mb-3 flex w-full items-center gap-4 rounded-[24px] bg-surface px-5 py-4 text-left shadow-soft ring-1 ring-line transition active:scale-[0.99] sm:py-5"
-      >
-        <div className="min-w-0 flex-1">
-          <div className="label-caps">{book ? "Reading" : "Quick session"}</div>
-          <div className="mt-1 truncate font-serif text-[21px] leading-tight tracking-[-0.01em] sm:text-[22px]">
-            {book ? book.title : books.length ? "No book" : "Add your first book"}
-          </div>
-          {book ? (
-            <>
-              <div className="mt-1 text-[13px] text-muted">
-                {isFinished(book) ? "Finished · reading again" : `p. ${book.currentPage} of ${book.totalPages}`}
-                {book.author ? ` · ${book.author}` : ""}
-              </div>
-              <Bar value={bookProgress(book)} className="mt-3 h-[3px]" tone="accent" />
-            </>
-          ) : (
-            <div className="mt-1 text-[13px] text-muted">
-              {books.length ? "Tap to choose a book" : "Or just set a target below and start"}
+    <>
+      {practice ? (
+        <label className="mb-3 block cursor-text rounded-[24px] bg-surface px-5 py-4 shadow-soft ring-1 ring-line sm:py-5">
+          <span className="label-caps">Practice test</span>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Name it (optional)"
+            maxLength={80}
+            className="mt-1 block w-full bg-transparent font-serif text-[21px] leading-tight tracking-[-0.01em] outline-none placeholder:text-muted/50 sm:text-[22px]"
+          />
+          <span className="mt-1 block text-[13px] text-muted">Each question gets its own countdown</span>
+        </label>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setPickerOpen(true)}
+          className="group mb-3 flex w-full items-center gap-4 rounded-[24px] bg-surface px-5 py-4 text-left shadow-soft ring-1 ring-line transition active:scale-[0.99] sm:py-5"
+        >
+          <div className="min-w-0 flex-1">
+            <div className="label-caps">{book ? "Reading" : "Quick session"}</div>
+            <div className="mt-1 truncate font-serif text-[21px] leading-tight tracking-[-0.01em] sm:text-[22px]">
+              {book ? book.title : books.length ? "No book" : "Add your first book"}
             </div>
-          )}
-        </div>
-        <ChevronRightIcon className="shrink-0 text-muted transition group-hover:translate-x-0.5 group-hover:text-fg" />
-      </button>
+            {book ? (
+              <>
+                <div className="mt-1 text-[13px] text-muted">
+                  {isFinished(book) ? "Finished · reading again" : `p. ${book.currentPage} of ${book.totalPages}`}
+                  {book.author ? ` · ${book.author}` : ""}
+                </div>
+                <Bar value={bookProgress(book)} className="mt-3 h-[3px]" tone="accent" />
+              </>
+            ) : (
+              <div className="mt-1 text-[13px] text-muted">
+                {books.length ? "Tap to choose a book" : "Or just set a target below and start"}
+              </div>
+            )}
+          </div>
+          <ChevronRightIcon className="shrink-0 text-muted transition group-hover:translate-x-0.5 group-hover:text-fg" />
+        </button>
+      )}
 
       <Card className="divide-y divide-line px-5">
         <Row
-          title="Session"
+          title={practice ? "Test length" : "Session"}
           detail={`Ends around ${formatTimeOfDay(now + durationMs)}`}
           control={
             <Stepper
-              label="session length"
+              label={practice ? "test length" : "session length"}
               value={durationMs}
               step={15 * MINUTE}
               min={DURATION_MS_MIN}
@@ -145,11 +216,11 @@ export function SetupScreen() {
           <Presets values={DURATION_PRESETS} value={durationMs} onChange={setDurationMs} format={formatDuration} />
         </Row>
         <Row
-          title="Per page"
-          detail="Then auto-advances"
+          title={`Per ${units.one}`}
+          detail={practice ? "Then moves on" : "Then auto-advances"}
           control={
             <Stepper
-              label="time per page"
+              label={`time per ${units.one}`}
               value={pageMs}
               step={PAGE_MS_STEP}
               min={PAGE_MS_MIN}
@@ -160,37 +231,51 @@ export function SetupScreen() {
             </Stepper>
           }
         >
-          <Presets values={PACE_PRESETS} value={pageMs} onChange={setPageMs} format={formatDuration} />
+          <Presets values={PACE_PRESETS[mode]} value={pageMs} onChange={setPageMs} format={formatDuration} />
         </Row>
         <Row
-          title="Start page"
-          detail={book ? `of ${book.totalPages}` : "Where you begin"}
+          title={practice ? "First question" : "Start page"}
+          detail={book ? `of ${book.totalPages}` : practice ? "Its number in your set" : "Where you begin"}
           control={
             <Stepper
-              label="start page"
+              label={practice ? "first question" : "start page"}
               value={startPage}
               step={1}
               min={1}
               max={maxStart}
               onChange={(v) => setStartPage(v)}
             >
-              <NumberInput key={startPage} value={startPage} min={1} max={maxStart} onChange={setStartPage} label="Start page" />
+              <NumberInput
+                key={startPage}
+                value={startPage}
+                min={1}
+                max={maxStart}
+                onChange={setStartPage}
+                label={practice ? "First question" : "Start page"}
+              />
             </Stepper>
           }
         />
         <Row
-          title="Pages"
-          detail={target > 1 ? `p. ${startPage} – ${startPage + target - 1}` : `p. ${startPage}`}
+          title={units.Many}
+          detail={target > 1 ? `${units.ref(startPage)} – ${units.ref(last)}` : units.ref(startPage)}
           control={
             <Stepper
-              label="pages to read"
+              label={`${units.many} to ${practice ? "solve" : "read"}`}
               value={target}
               step={1}
               min={1}
               max={maxTarget}
               onChange={setTargetOverride}
             >
-              <NumberInput key={target} value={target} min={1} max={maxTarget} onChange={setTargetOverride} label="Pages to read" />
+              <NumberInput
+                key={target}
+                value={target}
+                min={1}
+                max={maxTarget}
+                onChange={setTargetOverride}
+                label={`${units.Many} to ${practice ? "solve" : "read"}`}
+              />
             </Stepper>
           }
         />
@@ -201,18 +286,18 @@ export function SetupScreen() {
         <div className="flex min-h-[56px] items-center justify-center px-2 pb-2 pt-4 text-center text-[13px] leading-relaxed text-muted" aria-live="polite">
           {fits ? (
             <span>
-              {plural(target, "page")} in {formatDuration(neededMs)}
+              {units.count(target)} in {formatDuration(neededMs)}
               {durationMs - neededMs >= MINUTE && ` · ${formatDuration(durationMs - neededMs)} to spare`}
             </span>
           ) : (
             <span>
-              {plural(target, "page")} at {formatPace(pageMs)} needs {formatDuration(neededMs)}.{" "}
+              {units.count(target)} at {formatPace(pageMs)} needs {formatDuration(neededMs)}.{" "}
               <button
                 type="button"
                 onClick={() => setPageMs(fittingPace)}
                 className="font-medium text-fg underline decoration-line-strong underline-offset-4 transition hover:decoration-fg"
               >
-                Use {formatPace(fittingPace)} per page
+                Use {formatPace(fittingPace)} per {units.one}
               </button>
             </span>
           )}
@@ -220,17 +305,19 @@ export function SetupScreen() {
 
         <Button size="lg" className="w-full text-base" onClick={begin}>
           <PlayIcon size={18} />
-          Start session
+          {practice ? "Start practice" : "Start session"}
         </Button>
       </div>
 
-      <BookPickerSheet
-        open={pickerOpen}
-        onClose={() => setPickerOpen(false)}
-        selectedId={bookId}
-        onSelect={selectBook}
-      />
-    </div>
+      {!practice && (
+        <BookPickerSheet
+          open={pickerOpen}
+          onClose={() => setPickerOpen(false)}
+          selectedId={bookId}
+          onSelect={selectBook}
+        />
+      )}
+    </>
   );
 }
 

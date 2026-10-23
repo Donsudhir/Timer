@@ -13,7 +13,9 @@ import {
   setTargetPages,
   skipPage,
   startSession,
+  toRecord,
   undoPage,
+  unitDurations,
   upcomingAlerts,
   viewSession,
 } from "./session";
@@ -24,6 +26,7 @@ function make(overrides: Partial<Parameters<typeof startSession>[0]> = {}) {
   return startSession(
     {
       id: "s1",
+      mode: "read",
       bookId: null,
       title: "Test",
       startPage: 10,
@@ -47,7 +50,7 @@ describe("reconcile", () => {
   it("counts a page exactly when the micro timer reaches zero and restarts it", () => {
     const r = reconcile(make(), T0 + 5 * MINUTE);
     expect(r.advanced).toBe(1);
-    expect(r.session.pages).toEqual([{ at: T0 + 5 * MINUTE, kind: "auto" }]);
+    expect(r.session.pages).toEqual([{ at: T0 + 5 * MINUTE, kind: "auto", el: 5 * MINUTE }]);
     expect(r.session.pageStartMs).toBe(5 * MINUTE);
     const v = viewSession(r.session, T0 + 5 * MINUTE);
     expect(v.microRemaining).toBe(5 * MINUTE);
@@ -115,7 +118,7 @@ describe("pause and resume", () => {
 describe("manual controls", () => {
   it("skip counts the page and restarts the micro timer on a whole second", () => {
     const s = skipPage(make(), T0 + 90 * SECOND + 300);
-    expect(s.pages).toEqual([{ at: T0 + 90 * SECOND + 300, kind: "manual" }]);
+    expect(s.pages).toEqual([{ at: T0 + 90 * SECOND + 300, kind: "manual", el: 90 * SECOND + 300 }]);
     expect(s.pageStartMs).toBe(90 * SECOND);
     expect(viewSession(s, T0 + 90 * SECOND + 300).microRemaining).toBe(5 * MINUTE - 300);
   });
@@ -227,5 +230,37 @@ describe("upcomingAlerts", () => {
 
   it("is empty while paused", () => {
     expect(upcomingAlerts(pauseSession(make(), T0 + MINUTE), T0 + MINUTE, HOUR)).toEqual([]);
+  });
+});
+
+describe("practice timing", () => {
+  const practice = () => make({ mode: "practice", pageMs: 2 * MINUTE, targetPages: 10, durationMs: HOUR });
+
+  it("measures each question in session time, excluding pauses", () => {
+    let s = practice();
+    s = skipPage(s, T0 + 70 * SECOND); // Q1 solved in 1:10
+    s = pauseSession(s, T0 + 100 * SECOND); // 30 s into Q2, then a 10-minute break
+    s = resumeSession(s, T0 + 700 * SECOND);
+    s = reconcile(s, T0 + 800 * SECOND).session; // Q2 times out at 2:00 of its own time
+    expect(unitDurations(s)).toEqual([70 * SECOND, 2 * MINUTE]);
+  });
+
+  it("records the mode and how many questions timed out", () => {
+    let s = practice();
+    s = skipPage(s, T0 + 30 * SECOND);
+    s = reconcile(s, T0 + 30 * SECOND + 4 * MINUTE).session;
+    s = endSession(s, T0 + 30 * SECOND + 4 * MINUTE);
+    const record = toRecord(s);
+    expect(record.mode).toBe("practice");
+    expect(record.pageTimes).toHaveLength(3);
+    expect(record.timedOut).toBe(2);
+  });
+
+  it("charges time from before an undo to the question being redone", () => {
+    let s = practice();
+    s = skipPage(s, T0 + 40 * SECOND);
+    s = undoPage(s, T0 + 50 * SECOND);
+    s = skipPage(s, T0 + 90 * SECOND);
+    expect(unitDurations(s)).toEqual([90 * SECOND]);
   });
 });

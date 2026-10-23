@@ -1,4 +1,4 @@
-import type { ActiveSession, EndReason, SessionRecord } from "./types";
+import type { ActiveSession, EndReason, SessionMode, SessionRecord } from "./types";
 
 export const SECOND = 1000;
 export const MINUTE = 60 * SECOND;
@@ -94,7 +94,7 @@ export function reconcile(s: ActiveSession, now: number): ReconcileResult {
   for (;;) {
     const pageEnd = pageStartMs + s.pageMs;
     if (pageEnd <= s.durationMs && elapsed >= pageEnd) {
-      added.push({ at: epochAtElapsed(s, pageEnd), kind: "auto" });
+      added.push({ at: epochAtElapsed(s, pageEnd), kind: "auto", el: pageEnd });
       pageStartMs = pageEnd;
       if (s.pages.length + added.length >= s.targetPages) {
         finish = { elapsed: pageEnd, reason: "target" };
@@ -118,6 +118,7 @@ export function reconcile(s: ActiveSession, now: number): ReconcileResult {
 
 export interface StartParams {
   id: string;
+  mode: SessionMode;
   bookId: string | null;
   title: string;
   startPage: number;
@@ -159,7 +160,7 @@ export function skipPage(s: ActiveSession, now: number): ActiveSession {
   const elapsed = elapsedAt(r, now);
   const next: ActiveSession = {
     ...r,
-    pages: [...r.pages, { at: now, kind: "manual" }],
+    pages: [...r.pages, { at: now, kind: "manual", el: elapsed }],
     pageStartMs: Math.min(alignSecond(elapsed), r.durationMs),
   };
   return reconcile(next, now).session;
@@ -343,9 +344,24 @@ export function upcomingAlerts(
   return out;
 }
 
+/**
+ * Time spent on each counted page/question, in session time (pauses excluded).
+ * Includes any time before an undo or restart, since that was spent on it too.
+ */
+export function unitDurations(s: ActiveSession): number[] {
+  let prev = 0;
+  return s.pages.map((p) => {
+    const el = p.el ?? prev;
+    const spent = Math.max(0, el - prev);
+    prev = el;
+    return spent;
+  });
+}
+
 export function toRecord(s: ActiveSession): SessionRecord {
   return {
     id: s.id,
+    mode: s.mode ?? "read",
     bookId: s.bookId,
     title: s.title,
     startPage: s.startPage,
@@ -356,6 +372,7 @@ export function toRecord(s: ActiveSession): SessionRecord {
     endedAt: s.endedAt ?? s.startedAt + s.accumulatedMs,
     activeMs: s.accumulatedMs,
     pageTimes: s.pages.map((p) => p.at),
+    timedOut: s.pages.filter((p) => p.kind === "auto").length,
     endReason: s.endReason ?? "ended",
   };
 }

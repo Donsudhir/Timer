@@ -8,6 +8,9 @@ export interface Totals {
   sessions: number;
   /** Average time per page across the sessions counted, or null with no pages. */
   paceMs: number | null;
+  /** Of the pages in the sessions counted, how many were counted because time ran out. */
+  timedOut: number;
+  sessionPages: number;
 }
 
 export interface Bucket {
@@ -33,18 +36,27 @@ export function totals(records: SessionRecord[], since = 0): Totals {
   let sessions = 0;
   let pacedMs = 0;
   let pacedPages = 0;
+  let timedOut = 0;
   for (const r of records) {
     for (const t of r.pageTimes) if (t >= since) pages++;
     if (r.startedAt >= since) {
       ms += r.activeMs;
       sessions++;
+      timedOut += r.timedOut ?? 0;
       if (r.pageTimes.length) {
         pacedMs += r.activeMs;
         pacedPages += r.pageTimes.length;
       }
     }
   }
-  return { pages, ms, sessions, paceMs: pacedPages ? pacedMs / pacedPages : null };
+  return {
+    pages,
+    ms,
+    sessions,
+    paceMs: pacedPages ? pacedMs / pacedPages : null,
+    timedOut,
+    sessionPages: pacedPages,
+  };
 }
 
 function addDays(dayStart: number, days: number): number {

@@ -4,6 +4,12 @@ A calm, strict reading-pace timer. Pick a book, a number of pages and a time per
 page; PagePace runs two synchronized countdowns and turns the page for you when
 each page's time is up, so you finish pages instead of just logging hours.
 
+**Practice mode** does the same for tests: set a test length and a time per
+question, and each question gets its own countdown. When it runs out, PagePace
+moves you on, which is the habit timed exams reward. The summary charts
+the time spent on every question against the limit, and splits them into
+finished within time vs. timed out.
+
 Installable PWA, local-first, no account.
 
 ## Run it
@@ -53,8 +59,8 @@ Settings → Export/Import moves data between devices as JSON.
 | Action | Touch | Keyboard |
 | --- | --- | --- |
 | Pause / resume | Center button | Space |
-| Finished the page early | Next page | → or N |
-| Un-count the last page (re-read it with a fresh timer) | Undo | U, Backspace, ⌘/Ctrl+Z |
+| Finished the page/question early | Next page / Next question | → or N |
+| Un-count the last one (redo it with a fresh timer) | Undo | U, Backspace, ⌘/Ctrl+Z |
 | Change pace, length or target; restart page; end or reset | Sliders icon | — |
 
 ## Layout
@@ -64,6 +70,7 @@ app/                 routes: / (setup → focus → summary), /library, /stats, 
 components/focus/    setup, focus dashboard, adjust sheet, session summary
 components/          shell, runtime engine, UI primitives, icons
 lib/session.ts       pure timer engine (fully unit tested)
+lib/units.ts         page/question wording per session mode
 lib/store.ts         persisted app state and actions
 lib/audio.ts         synthesized chimes and audio-clock scheduling
 lib/stats.ts         daily/weekly aggregation

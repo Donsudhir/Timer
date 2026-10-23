@@ -2,11 +2,12 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { alertAudio } from "@/lib/audio";
-import { formatClock, formatDuration, formatPace, formatTimeOfDay, plural } from "@/lib/format";
+import { formatClock, formatDuration, formatPace, formatTimeOfDay } from "@/lib/format";
 import { useNow } from "@/lib/hooks";
 import { SECOND, msToNextSecond, viewSession, type SessionView } from "@/lib/session";
 import { useApp } from "@/lib/store";
 import type { ActiveSession } from "@/lib/types";
+import { type Units, unitsFor } from "@/lib/units";
 import { GaugeIcon, NextIcon, PauseIcon, PlayIcon, SlidersIcon, UndoIcon, VolumeIcon } from "../icons";
 import { bookProgress } from "../books";
 import { useAudioReady } from "../runtime";
@@ -22,7 +23,7 @@ function toggleRunning() {
   }
 }
 
-/** Space: pause/resume · → or N: next page · U, Backspace or ⌘Z: undo. */
+/** Space: pause/resume · → or N: next page/question · U, Backspace or ⌘Z: undo. */
 function useShortcuts() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -55,6 +56,7 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
   const now = useNow();
   const v = viewSession(session, now);
   const running = session.status === "running";
+  const units = unitsFor(session.mode);
   const settings = useApp((s) => s.settings);
   const bookPercent = useApp((s) => {
     const book = s.books.find((b) => b.id === session.bookId);
@@ -80,7 +82,11 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
       <header className="flex items-center justify-between gap-3 pt-4 sm:pt-6">
         <div className="min-w-0 animate-fade">
           <div className="label-caps tabular">
-            {bookPercent !== null ? `${bookPercent}% through` : "Quick session"}
+            {bookPercent !== null
+              ? `${bookPercent}% through`
+              : session.mode === "practice"
+                ? `Practice · ${formatDuration(session.durationMs)}`
+                : "Quick session"}
           </div>
           <div className="truncate font-serif text-[19px] leading-snug tracking-[-0.01em]">{session.title}</div>
         </div>
@@ -98,7 +104,7 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
           paused={!running}
         >
           <div key={v.currentPage} className="label-caps animate-tick-in">
-            Page {v.currentPage}
+            {units.One} {v.currentPage}
           </div>
           <div
             className={cx(
@@ -106,7 +112,7 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
               !running && "animate-breathe",
             )}
             role="timer"
-            aria-label={`${formatClock(v.microRemaining)} left on this page`}
+            aria-label={`${formatClock(v.microRemaining)} left on this ${units.one}`}
           >
             {formatClock(v.microRemaining)}
           </div>
@@ -114,11 +120,11 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
         </MicroRing>
 
         <div className="grid w-full grid-cols-2 gap-8">
-          <Stat label="Session left" value={formatClock(v.macroRemaining)}>
+          <Stat label={session.mode === "practice" ? "Test left" : "Session left"} value={formatClock(v.macroRemaining)}>
             <Bar value={v.macroProgress} smooth={running} />
           </Stat>
           <Stat
-            label="Pages"
+            label={units.Many}
             align="right"
             value={
               <>
@@ -131,7 +137,7 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
           </Stat>
         </div>
 
-        <PaceLine v={v} running={running} now={now} />
+        <PaceLine v={v} units={units} running={running} now={now} />
       </div>
 
       <div className="space-y-2">
@@ -140,8 +146,8 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
             <GaugeIcon size={18} className="shrink-0 text-muted" />
             <p className="min-w-0 flex-1 leading-snug text-fg-2">
               {suggestion < session.pageMs
-                ? `To finish ${plural(session.targetPages, "page")} in time, try ${formatPace(suggestion)} per page.`
-                : `You're ahead — ${formatPace(suggestion)} per page still finishes on time.`}
+                ? `To finish ${units.count(session.targetPages)} in time, try ${formatPace(suggestion)} per ${units.one}.`
+                : `You're ahead — ${formatPace(suggestion)} per ${units.one} still finishes on time.`}
             </p>
             <button
               type="button"
@@ -178,7 +184,7 @@ export function FocusScreen({ session }: { session: ActiveSession }) {
         >
           {running ? <PauseIcon size={28} /> : <PlayIcon size={28} className="translate-x-[2px]" />}
         </button>
-        <RoundAction label="Next page" onClick={skip}>
+        <RoundAction label={units.next} onClick={skip}>
           <NextIcon size={22} />
         </RoundAction>
       </div>
@@ -203,12 +209,22 @@ function pickSuggestion(
   return s;
 }
 
-function PaceLine({ v, running, now }: { v: SessionView; running: boolean; now: number }) {
+function PaceLine({
+  v,
+  units,
+  running,
+  now,
+}: {
+  v: SessionView;
+  units: Units;
+  running: boolean;
+  now: number;
+}) {
   const count = Math.max(1, Math.round(Math.abs(v.paceDelta)));
   const label =
     v.paceStatus === "on-track"
       ? "On track"
-      : `${plural(count, "page")} ${v.paceStatus === "ahead" ? "ahead" : "behind"}`;
+      : `${units.count(count)} ${v.paceStatus === "ahead" ? "ahead" : "behind"}`;
   const over = v.timeToTargetMs - v.macroRemaining;
   return (
     <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[13px]">
@@ -321,7 +337,7 @@ function RoundAction({
   children: ReactNode;
 }) {
   return (
-    <div className="flex w-16 flex-col items-center gap-2 pt-[11px]">
+    <div className="flex w-20 flex-col items-center gap-2 pt-[11px]">
       <button
         type="button"
         onClick={onClick}
